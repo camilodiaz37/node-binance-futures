@@ -3,3 +3,10 @@ node_modules
 .claude
 .npm
 dist
+*.log
+.DS_Store
+coverage
+.vscode
+.idea
+*.tmp
+*.swp

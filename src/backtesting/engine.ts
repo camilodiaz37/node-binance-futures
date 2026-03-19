@@ -236,10 +236,11 @@ export function runBacktest(
 
       // Cerrar por SL/TP
       if (closed && closeReason) {
+        const positionType = position?.type;
         const trade = closePosition(currentPrice, closeReason, currentTime);
         if (trade) {
           trades.push(trade);
-          lastSignal = position!.type === "BUY" ? "SELL" : "BUY";
+          lastSignal = positionType === "BUY" ? "SELL" : "BUY";
           lastSignalPrice = currentPrice;
         }
       } else {
