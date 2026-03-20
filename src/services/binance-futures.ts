@@ -84,6 +84,27 @@ class BinanceFuturesClient {
     return response.data;
   }
 
+  private async signedDelete<T>(
+    endpoint: string,
+    params?: Record<string, string | number | boolean>,
+  ): Promise<T> {
+    const timestamp = Date.now();
+    let queryString = `timestamp=${timestamp}`;
+
+    if (params) {
+      const paramString = Object.entries(params)
+        .map(([k, v]) => `${k}=${v}`)
+        .join("&");
+      queryString += `&${paramString}`;
+    }
+
+    const signature = this.createSignature(queryString);
+    const url = `${endpoint}?${queryString}&signature=${signature}`;
+
+    const response = await this.client.delete<T>(url);
+    return response.data;
+  }
+
   private async publicGet<T>(
     endpoint: string,
     params?: Record<string, string | number>,
@@ -183,13 +204,24 @@ class BinanceFuturesClient {
     if (params.positionSide) orderParams.positionSide = params.positionSide;
 
     // Conditional orders (STOP, TAKE_PROFIT) must use algoOrder endpoint since 2025-12-09
-    const isConditionalOrder = ["STOP", "STOP_MARKET", "TAKE_PROFIT", "TAKE_PROFIT_MARKET", "TRAILING_STOP_MARKET"].includes(params.type);
+    const isConditionalOrder = [
+      "STOP",
+      "STOP_MARKET",
+      "TAKE_PROFIT",
+      "TAKE_PROFIT_MARKET",
+      "TRAILING_STOP_MARKET",
+    ].includes(params.type);
 
-    const endpoint = isConditionalOrder ? "/fapi/v1/algoOrder" : "/fapi/v1/order";
+    const endpoint = isConditionalOrder
+      ? "/fapi/v1/algoOrder"
+      : "/fapi/v1/order";
 
     if (isConditionalOrder) {
       // Add algoOrder specific parameters
-      orderParams.algoType = params.type === "TRAILING_STOP_MARKET" ? "TRAILING_STOP_MARKET" : "CONDITIONAL";
+      orderParams.algoType =
+        params.type === "TRAILING_STOP_MARKET"
+          ? "TRAILING_STOP_MARKET"
+          : "CONDITIONAL";
 
       if (params.type === "TRAILING_STOP_MARKET") {
         // Placeholder - callbackRate must be set by caller
@@ -217,6 +249,7 @@ class BinanceFuturesClient {
       triggerPrice: stopPrice,
       algoType: "CONDITIONAL",
       timeInForce: "GTC",
+      reduceOnly: true, // Stop-loss should only reduce position
       ...(positionSide && { positionSide }),
     });
   }
@@ -239,6 +272,7 @@ class BinanceFuturesClient {
       triggerPrice: stopPrice,
       algoType: "CONDITIONAL",
       timeInForce: "GTC",
+      reduceOnly: true, // Take-profit should only reduce position
       ...(positionSide && { positionSide }),
     });
   }
@@ -258,8 +292,10 @@ class BinanceFuturesClient {
       symbol,
       side,
       quantity,
-      algoType: "TRAILING_STOP_MARKET",
+      algoType: "CONDITIONAL",
+      type: "TRAILING_STOP_MARKET",
       callbackRate,
+      reduceOnly: true, // Trailing stop should only reduce position
       ...(positionSide && { positionSide }),
     });
   }
@@ -320,6 +356,36 @@ class BinanceFuturesClient {
       symbol,
       orderId,
     });
+  }
+
+  /**
+   * Cancel all open TP/SL orders for a symbol (stop loss, take profit, trailing)
+   */
+  async cancelAllStopTakeProfitOrders(symbol: string): Promise<number> {
+    const openOrders = await this.getOpenOrders(symbol);
+    const algoOrderTypes = ["STOP", "STOP_MARKET", "TAKE_PROFIT", "TAKE_PROFIT_MARKET", "TRAILING_STOP_MARKET"];
+
+    const tpSlOrders = openOrders.filter((order) =>
+      algoOrderTypes.includes(order.type) ||
+      (order.type === "STOP_MARKET" || order.type === "TAKE_PROFIT_MARKET")
+    );
+
+    let cancelledCount = 0;
+    for (const order of tpSlOrders) {
+      try {
+        // Use the standard order endpoint for cancellation
+        await this.signedDelete("/fapi/v1/order", {
+          symbol,
+          orderId: order.orderId,
+        });
+        cancelledCount++;
+        console.log(`   🗑️ Cancelled ${order.type} order ${order.orderId}`);
+      } catch (error: any) {
+        console.warn(`   ⚠️ Failed to cancel order ${order.orderId}:`, error.response?.data?.msg || error.message);
+      }
+    }
+
+    return cancelledCount;
   }
 
   // Positions
