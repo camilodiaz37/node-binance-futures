@@ -12,6 +12,7 @@ export interface BotConfig {
   trailingStopEnabled: boolean;
   executionInterval: number;
   symbol: string;
+  maxPerPosition: number;  // Maximum amount per position in USDT
 }
 
 export interface StrategyConfig {

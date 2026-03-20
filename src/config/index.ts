@@ -42,6 +42,7 @@ export function getConfig(): BotConfig {
     trailingStopEnabled: process.env.TRAILING_STOP_ENABLED === "true",
     executionInterval: parseInt(process.env.EXECUTION_INTERVAL || "15", 10),
     symbol: process.env.SYMBOL || "BTCUSDT",
+    maxPerPosition: parseFloat(process.env.MAX_PER_POSITION || "0"),  // 0 = use full balance
   };
 
   validateConfig(config);

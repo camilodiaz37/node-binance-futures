@@ -11,6 +11,7 @@ export interface TradeResult {
 /**
  * Calculate position size based on actual wallet balance and risk parameters
  * The position size is limited to what's actually available in the wallet
+ * and optionally limited by maxPerPosition
  */
 export function calculatePositionSize(
   availableBalance: number,
@@ -18,21 +19,48 @@ export function calculatePositionSize(
   entryPrice: number,
   stopLossPercent: number,
   leverage: number = 1,
+  maxPerPosition: number = 0,  // Maximum amount per position in USDT. 0 = no limit
 ): number {
   // Calculate position value based on risk amount (not leverage)
   const riskAmount = availableBalance * (riskPercent / 100);
   const priceRiskPerUnit = entryPrice * (stopLossPercent / 100);
-  const quantity = riskAmount / priceRiskPerUnit;
+  const quantityFromRisk = riskAmount / priceRiskPerUnit;
 
-  // Calculate max position based on available balance (without leverage for safety check)
+  // Calculate max position based on available balance (without leverage)
   const maxPositionFromBalance = availableBalance / entryPrice;
 
-  // Use the smaller of calculated quantity or available balance
-  // This ensures we never trade more than we have in the wallet
-  const safeQuantity = Math.min(quantity, maxPositionFromBalance);
+  let baseQuantity: number;
+
+  if (maxPerPosition > 0) {
+    // maxPerPosition is the maximum NOTIONAL value (before leverage)
+    // Convert to quantity by dividing by price
+    const maxPositionFromLimit = maxPerPosition / entryPrice;
+
+    // Use the smaller of risk-based or limit-based
+    baseQuantity = Math.min(quantityFromRisk, maxPositionFromBalance, maxPositionFromLimit);
+  } else {
+    // No maxPerPosition - use risk-based calculation
+    baseQuantity = Math.min(quantityFromRisk, maxPositionFromBalance);
+  }
+
+  // Don't floor when using maxPerPosition to preserve precision for validation
+  if (maxPerPosition > 0) {
+    return baseQuantity;
+  }
 
   // Round to 3 decimal places (Binance minimum is 0.001)
-  return Math.floor(safeQuantity * 1000) / 1000;
+  return Math.floor(baseQuantity * 1000) / 1000;
+}
+
+/**
+ * Returns the effective max per position, ensuring it meets Binance minimum
+ */
+export function getEffectiveMaxPerPosition(configuredMax: number): number {
+  const BINANCE_MIN_NOTIONAL = 100;
+  // Si maxPerPosition es menor que el mínimo de Binance, usar el mínimo
+  return configuredMax > 0 && configuredMax < BINANCE_MIN_NOTIONAL
+    ? BINANCE_MIN_NOTIONAL
+    : configuredMax;
 }
 
 /**
@@ -94,14 +122,51 @@ export async function executeTrade(
       currentPrice,
       config.stopLossPercent,
       config.leverage,
+      config.maxPerPosition,
     );
 
-    if (quantity < 0.001) {
-      console.log({ quantity });
+    // Validate minimum notional (Binance requires at least 100 USDT)
+    const BINANCE_MIN_NOTIONAL = 100;
+    let finalQuantity = quantity;
+    const notional = quantity * currentPrice;
+
+    // Floor to 3 decimal places (Binance minimum is 0.001 BTC)
+    let flooredQuantity = Math.floor(quantity * 1000) / 1000;
+    const flooredNotional = flooredQuantity * currentPrice;
+
+    if (flooredNotional >= BINANCE_MIN_NOTIONAL) {
+      // Floor is OK - use it
+      finalQuantity = flooredQuantity;
+    } else if (notional >= BINANCE_MIN_NOTIONAL) {
+      // Can't floor - would go below minimum. Use ceil to meet minimum
+      finalQuantity = Math.ceil(quantity * 1000) / 1000;
+      console.log(`   ⚠️ Ajustando a mínimo con ceil: ${finalQuantity} BTC = $${(finalQuantity * currentPrice).toFixed(2)} USDT`);
+    } else {
+      // Even original is below minimum
+      const effectiveMax = getEffectiveMaxPerPosition(config.maxPerPosition);
+      if (effectiveMax >= BINANCE_MIN_NOTIONAL || config.maxPerPosition === 0) {
+        finalQuantity = Math.ceil((BINANCE_MIN_NOTIONAL / currentPrice) * 1000) / 1000;
+        console.log(`   ⚠️ Ajustando a mínimo Binance: ${finalQuantity} BTC`);
+      } else {
+        console.log({ quantity, notional });
+        return {
+          success: false,
+          error: `Insufficient notional: ${notional.toFixed(2)} USDT (min: ${BINANCE_MIN_NOTIONAL})`,
+        };
+      }
+    }
+
+    if (finalQuantity < 0.001) {
+      console.log({ quantity: finalQuantity });
       return {
         success: false,
         error: "Insufficient balance for minimum position size",
       };
+    }
+
+    // Log max per position limit if set
+    if (config.maxPerPosition > 0) {
+      console.log(`   🔒 Límite máximo por posición: $${config.maxPerPosition} USDT`);
     }
 
     // Calculate SL/TP
@@ -116,7 +181,7 @@ export async function executeTrade(
     const order = await orderService.openOrder(
       tradeSymbol,
       side,
-      quantity,
+      finalQuantity,
       currentPrice,
       stopLoss,
       takeProfit,
@@ -125,7 +190,7 @@ export async function executeTrade(
 
     console.log(`[TRADE] Opened ${side} position:`, {
       symbol: tradeSymbol,
-      quantity,
+      quantity: finalQuantity,
       entryPrice: currentPrice,
       stopLoss,
       takeProfit,
