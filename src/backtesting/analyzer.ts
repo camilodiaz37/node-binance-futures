@@ -117,6 +117,22 @@ export function analyzeResults(
     profitFactor
   );
 
+  // Calculate duration statistics
+  const allDurations: number[] = [];
+  for (const result of Object.values(results)) {
+    for (const trade of result.trades) {
+      if (trade.durationMinutes !== undefined) {
+        allDurations.push(trade.durationMinutes);
+      }
+    }
+  }
+
+  const avgDurationMinutes = allDurations.length > 0
+    ? allDurations.reduce((a, b) => a + b, 0) / allDurations.length
+    : 0;
+  const minDurationMinutes = allDurations.length > 0 ? Math.min(...allDurations) : 0;
+  const maxDurationMinutes = allDurations.length > 0 ? Math.max(...allDurations) : 0;
+
   return {
     totalScenarios,
     totalTrades,
@@ -129,6 +145,9 @@ export function analyzeResults(
     slTriggeredPercent,
     tpTriggeredPercent,
     recommendations,
+    avgDurationMinutes,
+    minDurationMinutes,
+    maxDurationMinutes,
   };
 }
 
@@ -239,6 +258,11 @@ export function printAnalysisReport(report: AnalysisReport): void {
   console.log(`\n🎯 Triggers de Salida:`);
   console.log(`   Stop Loss: ${report.slTriggeredPercent.toFixed(1)}%`);
   console.log(`   Take Profit: ${report.tpTriggeredPercent.toFixed(1)}%`);
+
+  console.log(`\n⏱️  Duración de Operaciones:`);
+  console.log(`   Promedio: ${report.avgDurationMinutes.toFixed(1)} minutos`);
+  console.log(`   Mínimo: ${report.minDurationMinutes.toFixed(0)} minutos`);
+  console.log(`   Máximo: ${report.maxDurationMinutes.toFixed(0)} minutos`);
 
   console.log(`\n💡 Recomendaciones:`);
   report.recommendations.forEach((rec, i) => {

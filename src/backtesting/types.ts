@@ -63,6 +63,7 @@ export enum MarketCondition {
 export interface TradeResultExtended extends TradeResult {
   exitReason: "stop_loss" | "take_profit" | "signal";
   marketCondition: MarketCondition;
+  durationMinutes: number; // Duration from entry to exit in minutes
 }
 
 /**
@@ -101,4 +102,8 @@ export interface AnalysisReport {
   slTriggeredPercent: number;
   tpTriggeredPercent: number;
   recommendations: string[];
+  // Trade duration statistics
+  avgDurationMinutes: number;
+  minDurationMinutes: number;
+  maxDurationMinutes: number;
 }

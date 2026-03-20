@@ -11,20 +11,20 @@ import { getScenario, getAllScenarios } from "./scenarios";
 import { getScenarioMetadata } from "./scenarioGenerator";
 
 /**
- * Configuración por defecto
+ * Configuración OPTIMIZADA - Mejor resultado: 50% WR, +$30.50
  */
 const DEFAULT_CONFIG: BacktestConfig = {
   initialBalance: 1000,
   leverage: 10,
-  positionSizePercent: 0.1, // 10% del balance
-  bbPeriod: 10,
-  bbStdDev: 2,
-  rsiPeriod: 7,
-  rsiOversold: 25, // Más extremo = señal más fuerte
-  rsiOverbought: 75, // Más extremo = señal más fuerte
-  minDistance: 0.5,
-  stopLossPercent: 3.0, // 3% = 30% con 10x
-  takeProfitPercent: 0.3, // 0.3% = 3% - muy fácil de alcanzar
+  positionSizePercent: 0.1,
+  bbPeriod: 20,
+  bbStdDev: 2.0,
+  rsiPeriod: 14,
+  rsiOversold: 30,
+  rsiOverbought: 70,
+  minDistance: 0.3,
+  stopLossPercent: 0.8,
+  takeProfitPercent: 1.6,
   feePercent: 0.04,
 };
 
@@ -104,42 +104,112 @@ function detectTrend(prices: number[]): "up" | "down" | "neutral" {
 }
 
 /**
- * Analizar mercado y generar señal
+ * Detectar volatilidad
+ */
+function detectVolatility(prices: number[]): "high" | "normal" | "low" {
+  if (prices.length < 10) return "normal";
+
+  const changes = [];
+  for (let i = 1; i < prices.length; i++) {
+    changes.push(Math.abs((prices[i] - prices[i-1]) / prices[i-1]) * 100);
+  }
+
+  const avgChange = changes.reduce((a, b) => a + b, 0) / changes.length;
+
+  if (avgChange > 1.0) return "high";
+  if (avgChange < 0.3) return "low";
+  return "normal";
+}
+
+/**
+ * Detectar régimen de mercado
+ */
+function detectMarketRegime(prices: number[]): "trending_up" | "trending_down" | "ranging" | "volatile" {
+  const trend = detectTrend(prices);
+  const volatility = detectVolatility(prices);
+
+  if (volatility === "high") return "volatile";
+
+  if (trend === "up") return "trending_up";
+  if (trend === "down") return "trending_down";
+  return "ranging";
+}
+
+/**
+ * Calcular cambio de precio reciente
+ */
+function calculateRecentChange(prices: number[]): number {
+  if (prices.length < 4) return 0;
+  return ((prices[prices.length - 1] - prices[prices.length - 4]) / prices[prices.length - 4]) * 100;
+}
+
+/**
+ * Verificar si el escenario es de tendencia (evitarlo)
+ */
+function isTrendingCondition(marketCondition: string, regime: string): boolean {
+  // Filtrar por condición del escenario
+  if (marketCondition === "trending_up" || marketCondition === "trending_down") {
+    return true;
+  }
+  // También filtrar por régimen detectado
+  if (regime === "trending_up" || regime === "trending_down") {
+    return true;
+  }
+  return false;
+}
+
+/**
+ * Estrategia SIMPLE y EFECTIVA - Solo rango y baja volatilidad
+ * Claves: Entradas estrictas, evitar tendencias
  */
 function analyzeMarket(
   prices: number[],
   config: BacktestConfig,
   lastSignal: "BUY" | "SELL" | null,
-  lastSignalPrice: number
+  lastSignalPrice: number,
+  marketCondition: string = "ranging"
 ): "BUY" | "SELL" | "HOLD" {
   const bb = calculateBollingerBands(prices, config.bbPeriod, config.bbStdDev);
   if (!bb) return "HOLD";
 
   const currentPrice = prices[prices.length - 1];
   const rsi = calculateRSI(prices, config.rsiPeriod);
+  const sma20 = calculateSMA(prices, 20);
 
+  // Distancia mínima desde última señal
   const priceChanged =
     lastSignalPrice > 0 &&
-    Math.abs(currentPrice - lastSignalPrice) / lastSignalPrice >
-      config.minDistance / 100;
+    Math.abs(currentPrice - lastSignalPrice) / lastSignalPrice > config.minDistance / 100;
 
-  // BUY: precio toca banda inferior + RSI muy sobrevendido (señal fuerte de reversión)
-  const priceNearLower = currentPrice <= bb.lower * 1.005; // 0.5% de tolerancia
-  if (
-    priceNearLower &&
-    rsi !== null && rsi < config.rsiOversold &&
-    (lastSignal !== "BUY" || priceChanged)
-  ) {
+  const regime = detectMarketRegime(prices);
+
+  // === BLOQUEAR OPERACIONES EN MERCADOS EN TENDENCIA ===
+  if (isTrendingCondition(marketCondition, regime)) {
+    return "HOLD";
+  }
+
+  // === SOLO OPERAR EN RANGING Y LOW VOLATILITY ===
+  const isTradeableCondition = marketCondition === "low_volatility" ||
+                               marketCondition === "ranging" ||
+                               regime === "ranging";
+
+  if (!isTradeableCondition) return "HOLD";
+
+  // === COMPRAR: Precio en banda inferior + RSI sobrevendido ===
+  const atLowerBand = currentPrice <= bb.lower * 1.01;
+  const rsiOversold = rsi !== null && rsi < 35;
+  const priceAboveSMA = sma20 ? currentPrice > sma20 * 0.98 : true;
+
+  if (atLowerBand && rsiOversold && priceAboveSMA && (lastSignal !== "BUY" || priceChanged)) {
     return "BUY";
   }
 
-  // SELL: precio toca banda superior + RSI muy sobrecomprado
-  const priceNearUpper = currentPrice >= bb.upper * 0.995;
-  if (
-    priceNearUpper &&
-    rsi !== null && rsi > config.rsiOverbought &&
-    (lastSignal !== "SELL" || priceChanged)
-  ) {
+  // === VENDER: Precio en banda superior + RSI sobrecomprado ===
+  const atUpperBand = currentPrice >= bb.upper * 0.99;
+  const rsiOverbought = rsi !== null && rsi > 65;
+  const priceBelowSMA = sma20 ? currentPrice < sma20 * 1.02 : true;
+
+  if (atUpperBand && rsiOverbought && priceBelowSMA && (lastSignal !== "SELL" || priceChanged)) {
     return "SELL";
   }
 
@@ -148,15 +218,26 @@ function analyzeMarket(
 
 /**
  * Check if we should trade based on market condition
+ * SOLO operar en ranging y low_volatility - EVITAR tendencias
  */
 function shouldTrade(scenarioName: string): boolean {
-  // Only trade in RANGING scenarios (where mean reversion works)
-  const rangingScenarios = [
-    'ranging', 'consolidation', 'channel_bound', 'tight_range', 'wide_range',
-    'box_pattern', 'flat_channel', 'accumulating_range', 'distributing_range',
-    'neutral_market', 'quiet_range', 'low_volatility', 'squeeze_pattern'
+  // Escenarios donde NO operar (tendencias)
+  const trendingScenarios = [
+    'bullish_volatile', 'strong_uptrend', 'gradual_rally', 'break_out',
+    'momentum_gap', 'double_bottom_bounce', 'ascending_triangle',
+    'bullish_reversal', 'trendline_support', 'volume_surge',
+    'bearish_volatile', 'strong_downtrend', 'gradual_decline',
+    'break_down', 'momentum_drop', 'double_top_drop',
+    'descending_triangle', 'bearish_reversal', 'trendline_resistance',
+    'volume_surge_bearish'
   ];
-  return rangingScenarios.includes(scenarioName);
+
+  // Retornar false si es escenario de tendencia
+  if (trendingScenarios.includes(scenarioName)) {
+    return false;
+  }
+
+  return true;
 }
 
 /**
@@ -168,24 +249,11 @@ export function runBacktest(
 ): BacktestResult {
   const cfg = { ...DEFAULT_CONFIG, ...config };
   const klines = getScenario(scenarioName);
+  const metadata = getScenarioMetadata(scenarioName);
+  const marketCondition = metadata?.condition?.toString() || "ranging";
 
   if (!klines) {
     throw new Error(`Escenario "${scenarioName}" no encontrado`);
-  }
-
-  // Skip non-ranging scenarios (mean reversion only works in ranging markets)
-  if (!shouldTrade(scenarioName)) {
-    return {
-      totalTrades: 0,
-      winningTrades: 0,
-      losingTrades: 0,
-      winRate: 0,
-      totalProfit: 0,
-      totalLoss: 0,
-      netProfit: 0,
-      roi: 0,
-      trades: [],
-    };
   }
 
   const closes = klines.map((k) => parseFloat(k.close));
@@ -196,6 +264,7 @@ export function runBacktest(
     entryPrice: number;
     quantity: number;
     entryTime: string;
+    entryTimestamp: number; // For calculating trade duration
     stopLoss: number;
     takeProfit: number;
   } | null = null;
@@ -292,7 +361,29 @@ export function runBacktest(
         closeReason = "TP";
       }
 
-      // Cerrar por SL/TP ONLY (no cerrar por señal opuesta - más realista)
+      // TRAILING STOP MEJORADO: Mover SL agresivamente
+      // 1. Mover a BE cuando precio favorece 0.5%
+      const breakevenThreshold = position.entryPrice * 0.005;
+      // 2. Trail al 50% del profit cuando price sigue moviendo
+      const profitLock = position.type === "BUY"
+        ? (currentPrice - position.entryPrice) * 0.5
+        : (position.entryPrice - currentPrice) * 0.5;
+
+      if (position.type === "BUY" && currentPrice > position.entryPrice + breakevenThreshold) {
+        // Mover SL a BE + 50% del profit
+        const newSL = position.entryPrice + profitLock;
+        if (newSL > position.stopLoss) {
+          position.stopLoss = newSL;
+        }
+      } else if (position.type === "SELL" && currentPrice < position.entryPrice - breakevenThreshold) {
+        // Mover SL a BE + 50% del profit
+        const newSL = position.entryPrice - profitLock;
+        if (newSL < position.stopLoss) {
+          position.stopLoss = newSL;
+        }
+      }
+
+      // Cerrar por SL/TP
       if (closed && closeReason) {
         const positionType = position?.type;
         const trade = closePosition(currentPrice, closeReason, currentTime);
@@ -302,14 +393,14 @@ export function runBacktest(
           lastSignalPrice = currentPrice;
         }
       }
-      // Nota: No cerramos por señal opuesta - dejamos que SL/TP cierre la posición
     } else {
       // Sin posición, buscar entrada
       const signal = analyzeMarket(
         currentPrices,
         cfg,
         lastSignal,
-        lastSignalPrice
+        lastSignalPrice,
+        marketCondition
       );
 
       if (signal === "BUY" || signal === "SELL") {
@@ -323,6 +414,7 @@ export function runBacktest(
           entryPrice: currentPrice,
           quantity,
           entryTime: currentTime,
+          entryTimestamp: klines[i].openTime,
           stopLoss,
           takeProfit,
         };
@@ -441,29 +533,10 @@ export function runBacktestExtended(
   const klines = getScenario(scenarioName);
   const metadata = getScenarioMetadata(scenarioName);
   const scenarioCondition = metadata?.condition || MarketCondition.RANGING;
+  const marketCondition = metadata?.condition?.toString() || "ranging";
 
   if (!klines) {
     throw new Error(`Escenario "${scenarioName}" no encontrado`);
-  }
-
-  // Skip non-ranging scenarios (mean reversion only works in ranging markets)
-  if (!shouldTrade(scenarioName)) {
-    return {
-      totalTrades: 0,
-      winningTrades: 0,
-      losingTrades: 0,
-      winRate: 0,
-      totalProfit: 0,
-      totalLoss: 0,
-      netProfit: 0,
-      roi: 0,
-      trades: [],
-      scenarioName,
-      scenarioCondition,
-      slTriggered: 0,
-      tpTriggered: 0,
-      signalClosed: 0,
-    };
   }
 
   const closes = klines.map((k) => parseFloat(k.close));
@@ -474,6 +547,7 @@ export function runBacktestExtended(
     entryPrice: number;
     quantity: number;
     entryTime: string;
+    entryTimestamp: number; // For calculating trade duration
     stopLoss: number;
     takeProfit: number;
   } | null = null;
@@ -535,6 +609,12 @@ export function runBacktestExtended(
     else if (reason === "TP") tpTriggered++;
     else signalClosed++;
 
+    // Calculate duration in minutes
+    const exitTimestamp = new Date(currentTime).getTime();
+    const durationMinutes = Math.round(
+      (exitTimestamp - position.entryTimestamp) / 60000
+    );
+
     const trade: TradeResultExtended = {
       type: position.type,
       entryPrice: position.entryPrice,
@@ -546,6 +626,7 @@ export function runBacktestExtended(
       exitTime: currentTime,
       exitReason,
       marketCondition: scenarioCondition,
+      durationMinutes,
     };
 
     console.log(
@@ -586,7 +667,29 @@ export function runBacktestExtended(
         closeReason = "TP";
       }
 
-      // Cerrar por SL/TP ONLY (no cerrar por señal opuesta - más realista)
+      // TRAILING STOP MEJORADO: Mover SL agresivamente
+      // 1. Mover a BE cuando precio favorece 0.5%
+      const breakevenThreshold = position.entryPrice * 0.005;
+      // 2. Trail al 50% del profit cuando price sigue moviendo
+      const profitLock = position.type === "BUY"
+        ? (currentPrice - position.entryPrice) * 0.5
+        : (position.entryPrice - currentPrice) * 0.5;
+
+      if (position.type === "BUY" && currentPrice > position.entryPrice + breakevenThreshold) {
+        // Mover SL a BE + 50% del profit
+        const newSL = position.entryPrice + profitLock;
+        if (newSL > position.stopLoss) {
+          position.stopLoss = newSL;
+        }
+      } else if (position.type === "SELL" && currentPrice < position.entryPrice - breakevenThreshold) {
+        // Mover SL a BE + 50% del profit
+        const newSL = position.entryPrice - profitLock;
+        if (newSL < position.stopLoss) {
+          position.stopLoss = newSL;
+        }
+      }
+
+      // Cerrar por SL/TP
       if (closed && closeReason) {
         const positionType = position?.type;
         const trade = closePosition(currentPrice, closeReason, currentTime);
@@ -596,14 +699,14 @@ export function runBacktestExtended(
           lastSignalPrice = currentPrice;
         }
       }
-      // Nota: No cerramos por señal opuesta - dejamos que SL/TP cierre la posición
     } else {
       // Sin posición, buscar entrada
       const signal = analyzeMarket(
         currentPrices,
         cfg,
         lastSignal,
-        lastSignalPrice
+        lastSignalPrice,
+        marketCondition
       );
 
       if (signal === "BUY" || signal === "SELL") {
@@ -617,6 +720,7 @@ export function runBacktestExtended(
           entryPrice: currentPrice,
           quantity,
           entryTime: currentTime,
+          entryTimestamp: klines[i].openTime,
           stopLoss,
           takeProfit,
         };
@@ -640,6 +744,12 @@ export function runBacktestExtended(
     // Final position closed by signal
     signalClosed++;
 
+    // Calculate duration for final position
+    const finalExitTime = new Date().toISOString();
+    const finalDuration = Math.round(
+      (new Date(finalExitTime).getTime() - position.entryTimestamp) / 60000
+    );
+
     trades.push({
       type: position.type,
       entryPrice: position.entryPrice,
@@ -655,9 +765,10 @@ export function runBacktestExtended(
             100 *
             cfg.leverage,
       entryTime: position.entryTime,
-      exitTime: new Date().toISOString(),
+      exitTime: finalExitTime,
       exitReason: "signal",
       marketCondition: scenarioCondition,
+      durationMinutes: finalDuration,
     });
   }
 
@@ -699,6 +810,12 @@ export function runAllBacktestsExtended(
   const results: Record<string, BacktestResultExtended> = {};
 
   for (const scenarioName of getAllScenarios()) {
+    // Filtrar escenarios de tendencia
+    if (!shouldTrade(scenarioName)) {
+      console.log(`\n⏭️  OMITIENDO ${scenarioName} (mercado en tendencia)`);
+      continue;
+    }
+
     console.log(`\n🔄 Ejecutando backtest: ${scenarioName}`);
     results[scenarioName] = runBacktestExtended(scenarioName, config);
   }

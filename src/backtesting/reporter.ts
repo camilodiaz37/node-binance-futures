@@ -94,6 +94,12 @@ export function generateReport(
   lines.push(`   Stop Loss triggered: ${analysis.slTriggeredPercent.toFixed(1)}%`);
   lines.push(`   Take Profit triggered: ${analysis.tpTriggeredPercent.toFixed(1)}%`);
 
+  // Duration statistics
+  lines.push(`\n⏱️  Duración de Operaciones:`);
+  lines.push(`   Promedio: ${analysis.avgDurationMinutes.toFixed(1)} minutos`);
+  lines.push(`   Mínimo: ${analysis.minDurationMinutes.toFixed(0)} minutos`);
+  lines.push(`   Máximo: ${analysis.maxDurationMinutes.toFixed(0)} minutos`);
+
   // Recommendations
   lines.push("\n" + "=".repeat(70));
   lines.push("💡 RECOMENDACIONES");
