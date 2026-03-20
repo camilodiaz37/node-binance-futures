@@ -8,6 +8,8 @@ export interface BotConfig {
   riskPercent: number;
   stopLossPercent: number;
   takeProfitPercent: number;
+  trailingStopPercent: number;
+  trailingStopEnabled: boolean;
   executionInterval: number;
   symbol: string;
 }

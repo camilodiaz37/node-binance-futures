@@ -168,6 +168,7 @@ class BinanceFuturesClient {
   }
 
   // Orders
+  // Use /fapi/v1/order for MARKET/LIMIT, /fapi/v1/algoOrder for STOP/TAKE_PROFIT/TRAILING
   async placeOrder(params: PlaceOrderParams): Promise<OrderResponse> {
     const orderParams: Record<string, string | number | boolean> = {
       symbol: params.symbol,
@@ -181,12 +182,85 @@ class BinanceFuturesClient {
     if (params.timeInForce) orderParams.timeInForce = params.timeInForce;
     if (params.positionSide) orderParams.positionSide = params.positionSide;
 
+    // Conditional orders (STOP, TAKE_PROFIT) must use algoOrder endpoint since 2025-12-09
+    const isConditionalOrder = ["STOP", "STOP_MARKET", "TAKE_PROFIT", "TAKE_PROFIT_MARKET", "TRAILING_STOP_MARKET"].includes(params.type);
+
+    const endpoint = isConditionalOrder ? "/fapi/v1/algoOrder" : "/fapi/v1/order";
+
+    if (isConditionalOrder) {
+      // Add algoOrder specific parameters
+      orderParams.algoType = params.type === "TRAILING_STOP_MARKET" ? "TRAILING_STOP_MARKET" : "CONDITIONAL";
+
+      if (params.type === "TRAILING_STOP_MARKET") {
+        // Placeholder - callbackRate must be set by caller
+      }
+    }
+
+    return this.signedPost<OrderResponse>(endpoint, orderParams);
+  }
+
+  /**
+   * Place stop-loss order using algoOrder endpoint
+   */
+  async placeStopLossOrder(
+    symbol: string,
+    side: "BUY" | "SELL",
+    quantity: number,
+    stopPrice: number,
+    positionSide?: "LONG" | "SHORT",
+  ): Promise<OrderResponse> {
     return this.signedPost<OrderResponse>("/fapi/v1/algoOrder", {
-      ...orderParams,
+      symbol,
+      side,
+      quantity,
+      type: "STOP_MARKET",
+      triggerPrice: stopPrice,
       algoType: "CONDITIONAL",
-      type: "TRAILING_STOP_MARKET",
-      callbackRate: 0.1, // 0.1% trailing stop
-      positionSide: "BOTH",
+      timeInForce: "GTC",
+      ...(positionSide && { positionSide }),
+    });
+  }
+
+  /**
+   * Place take-profit order using algoOrder endpoint
+   */
+  async placeTakeProfitOrder(
+    symbol: string,
+    side: "BUY" | "SELL",
+    quantity: number,
+    stopPrice: number,
+    positionSide?: "LONG" | "SHORT",
+  ): Promise<OrderResponse> {
+    return this.signedPost<OrderResponse>("/fapi/v1/algoOrder", {
+      symbol,
+      side,
+      quantity,
+      type: "TAKE_PROFIT_MARKET",
+      triggerPrice: stopPrice,
+      algoType: "CONDITIONAL",
+      timeInForce: "GTC",
+      ...(positionSide && { positionSide }),
+    });
+  }
+
+  /**
+   * Place trailing stop order with configurable callback rate
+   * Uses the algoOrder endpoint with TRAILING_STOP_MARKET type
+   */
+  async placeTrailingStopOrder(
+    symbol: string,
+    side: "BUY" | "SELL",
+    quantity: number,
+    callbackRate: number,
+    positionSide?: "LONG" | "SHORT",
+  ): Promise<OrderResponse> {
+    return this.signedPost<OrderResponse>("/fapi/v1/algoOrder", {
+      symbol,
+      side,
+      quantity,
+      algoType: "TRAILING_STOP_MARKET",
+      callbackRate,
+      ...(positionSide && { positionSide }),
     });
   }
 
@@ -219,40 +293,6 @@ class BinanceFuturesClient {
       }
       throw error;
     }
-  }
-
-  async placeStopLossOrder(
-    symbol: string,
-    side: "BUY" | "SELL",
-    quantity: number,
-    stopPrice: number,
-    positionSide?: "LONG" | "SHORT",
-  ): Promise<OrderResponse> {
-    return this.placeOrder({
-      symbol,
-      side,
-      type: "STOP_MARKET",
-      quantity,
-      stopPrice,
-      positionSide,
-    });
-  }
-
-  async placeTakeProfitOrder(
-    symbol: string,
-    side: "BUY" | "SELL",
-    quantity: number,
-    stopPrice: number,
-    positionSide?: "LONG" | "SHORT",
-  ): Promise<OrderResponse> {
-    return this.placeOrder({
-      symbol,
-      side,
-      type: "TAKE_PROFIT_MARKET",
-      quantity,
-      stopPrice,
-      positionSide,
-    });
   }
 
   async getOpenOrders(symbol?: string): Promise<Order[]> {

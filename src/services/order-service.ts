@@ -1,5 +1,6 @@
 import { Order, Position, OrderResponse, PlaceOrderParams } from "../types";
 import { getBinanceFuturesClient } from "./binance-futures";
+import { getConfig } from "../config";
 
 export type OrderStatus = "PENDING" | "OPEN" | "CLOSED" | "CANCELLED";
 
@@ -13,6 +14,9 @@ export interface ManagedOrder {
   currentPrice: number;
   stopLoss: number | null;
   takeProfit: number | null;
+  trailingStopEnabled: boolean;
+  trailingStopPercent: number;
+  trailingStopPrice: number | null;
   status: OrderStatus;
   leverage: number;
   openedAt: Date;
@@ -41,6 +45,7 @@ class OrderService {
     leverage: number = 10
   ): Promise<ManagedOrder> {
     const client = getBinanceFuturesClient();
+    const config = getConfig();
 
     // Set leverage
     await client.setLeverage(symbol, leverage);
@@ -60,6 +65,9 @@ class OrderService {
       currentPrice: entryPrice,
       stopLoss,
       takeProfit,
+      trailingStopEnabled: config.trailingStopEnabled,
+      trailingStopPercent: config.trailingStopPercent,
+      trailingStopPrice: null,
       status: "OPEN",
       leverage,
       openedAt: new Date(),
@@ -70,25 +78,56 @@ class OrderService {
 
     this.orders.set(order.id, order);
 
-    // Place SL/TP orders if provided
-    if (stopLoss) {
-      await client.placeStopLossOrder(
-        symbol,
-        side === "BUY" ? "SELL" : "BUY",
-        quantity,
-        stopLoss,
-        positionSide
-      );
+    // Validate SL/TP for position type
+    if (stopLoss && takeProfit) {
+      const isValid = positionSide === "LONG"
+        ? stopLoss < entryPrice && takeProfit > entryPrice
+        : takeProfit < entryPrice && stopLoss > entryPrice;
+
+      if (!isValid) {
+        console.warn(`   ⚠️ Invalid SL/TP configuration for ${positionSide} position. SL: ${stopLoss}, Entry: ${entryPrice}, TP: ${takeProfit}`);
+      }
     }
 
-    if (takeProfit) {
-      await client.placeTakeProfitOrder(
-        symbol,
-        side === "BUY" ? "SELL" : "BUY",
-        quantity,
-        takeProfit,
-        positionSide
-      );
+    // Place stop-loss and take-profit orders separately (no OCO in Futures)
+    // Using the algoOrder endpoint since 2025-12-09
+    // Note: Don't pass positionSide - let Binance infer it from the order side
+    if (stopLoss || takeProfit) {
+      const closeSide = side === "BUY" ? "SELL" : "BUY";
+
+      if (stopLoss) {
+        try {
+          await client.placeStopLossOrder(symbol, closeSide, quantity, stopLoss);
+          console.log(`   ✅ Stop-loss order placed at ${stopLoss}`);
+        } catch (error: any) {
+          console.error(`   ❌ Failed to place stop-loss order:`, error.response?.data || error.message);
+        }
+      }
+
+      if (takeProfit) {
+        try {
+          await client.placeTakeProfitOrder(symbol, closeSide, quantity, takeProfit);
+          console.log(`   ✅ Take-profit order placed at ${takeProfit}`);
+        } catch (error: any) {
+          console.error(`   ❌ Failed to place take-profit order:`, error.response?.data || error.message);
+        }
+      }
+    }
+
+    // Place trailing stop if enabled
+    if (config.trailingStopEnabled && config.trailingStopPercent > 0) {
+      try {
+        const closeSide = side === "BUY" ? "SELL" : "BUY";
+        await client.placeTrailingStopOrder(
+          symbol,
+          closeSide,
+          quantity,
+          config.trailingStopPercent
+        );
+        console.log(`   ✅ Trailing stop placed at ${config.trailingStopPercent}%`);
+      } catch (error: any) {
+        console.error(`   ❌ Failed to place trailing stop:`, error.response?.data || error.message);
+      }
     }
 
     return order;
@@ -136,31 +175,68 @@ class OrderService {
     order.pnl = priceDiff * order.quantity * order.leverage;
   }
 
-  async checkStopLossTakeProfit(orderId: string, currentPrice: number): Promise<"NONE" | "STOP_LOSS" | "TAKE_PROFIT"> {
+  async checkStopLossTakeProfit(orderId: string, currentPrice: number): Promise<"NONE" | "STOP_LOSS" | "TAKE_PROFIT" | "TRAILING_STOP"> {
     const order = this.orders.get(orderId);
     if (!order || order.status !== "OPEN") return "NONE";
 
     await this.updateOrderPrices(orderId, currentPrice);
 
+    // Check trailing stop first (if enabled and we have a trailing stop price)
+    if (order.trailingStopEnabled && order.trailingStopPrice) {
+      if (order.type === "LONG" && currentPrice <= order.trailingStopPrice) {
+        await this.closeOrder(orderId, "STOP_LOSS");
+        console.log(`   🔴 Trailing stop triggered at ${currentPrice} (threshold: ${order.trailingStopPrice})`);
+        return "TRAILING_STOP";
+      }
+      if (order.type === "SHORT" && currentPrice >= order.trailingStopPrice) {
+        await this.closeOrder(orderId, "STOP_LOSS");
+        console.log(`   🔴 Trailing stop triggered at ${currentPrice} (threshold: ${order.trailingStopPrice})`);
+        return "TRAILING_STOP";
+      }
+    }
+
+    // Check regular stop-loss
     if (order.stopLoss) {
       if (order.type === "LONG" && currentPrice <= order.stopLoss) {
         await this.closeOrder(orderId, "STOP_LOSS");
+        console.log(`   🔴 Stop-loss triggered at ${currentPrice} (threshold: ${order.stopLoss})`);
         return "STOP_LOSS";
       }
       if (order.type === "SHORT" && currentPrice >= order.stopLoss) {
         await this.closeOrder(orderId, "STOP_LOSS");
+        console.log(`   🔴 Stop-loss triggered at ${currentPrice} (threshold: ${order.stopLoss})`);
         return "STOP_LOSS";
       }
     }
 
+    // Check take-profit
     if (order.takeProfit) {
       if (order.type === "LONG" && currentPrice >= order.takeProfit) {
         await this.closeOrder(orderId, "TAKE_PROFIT");
+        console.log(`   🟢 Take-profit triggered at ${currentPrice} (threshold: ${order.takeProfit})`);
         return "TAKE_PROFIT";
       }
       if (order.type === "SHORT" && currentPrice <= order.takeProfit) {
         await this.closeOrder(orderId, "TAKE_PROFIT");
+        console.log(`   🟢 Take-profit triggered at ${currentPrice} (threshold: ${order.takeProfit})`);
         return "TAKE_PROFIT";
+      }
+    }
+
+    // Update trailing stop price if enabled and price is moving favorably
+    if (order.trailingStopEnabled && order.trailingStopPercent > 0) {
+      const newTrailingPrice = order.type === "LONG"
+        ? currentPrice * (1 - order.trailingStopPercent / 100)
+        : currentPrice * (1 + order.trailingStopPercent / 100);
+
+      // Only update if the new trailing price is better (higher for LONG, lower for SHORT)
+      const shouldUpdate = order.type === "LONG"
+        ? !order.trailingStopPrice || newTrailingPrice > order.trailingStopPrice
+        : !order.trailingStopPrice || newTrailingPrice < order.trailingStopPrice;
+
+      if (shouldUpdate) {
+        order.trailingStopPrice = newTrailingPrice;
+        console.log(`   📈 Trailing stop updated to ${newTrailingPrice.toFixed(2)}`);
       }
     }
 
