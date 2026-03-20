@@ -45,3 +45,65 @@ export interface BacktestConfig {
   takeProfitPercent: number;
   feePercent: number;
 }
+
+/**
+ * Market condition types for scenario categorization
+ */
+export enum MarketCondition {
+  TRENDING_UP = "trending_up",
+  TRENDING_DOWN = "trending_down",
+  RANGING = "ranging",
+  HIGH_VOLATILITY = "high_volatility",
+  LOW_VOLATILITY = "low_volatility",
+}
+
+/**
+ * Extended trade result with exit reason and market condition
+ */
+export interface TradeResultExtended extends TradeResult {
+  exitReason: "stop_loss" | "take_profit" | "signal";
+  marketCondition: MarketCondition;
+  durationMinutes: number; // Duration from entry to exit in minutes
+}
+
+/**
+ * Scenario metadata for tracking
+ */
+export interface ScenarioMetadata {
+  name: string;
+  condition: MarketCondition;
+  description: string;
+}
+
+/**
+ * Extended backtest result with scenario metadata
+ */
+export interface BacktestResultExtended extends Omit<BacktestResult, "trades"> {
+  scenarioName: string;
+  scenarioCondition: MarketCondition;
+  trades: TradeResultExtended[];
+  slTriggered: number;
+  tpTriggered: number;
+  signalClosed: number;
+}
+
+/**
+ * Analysis report with strategy recommendations
+ */
+export interface AnalysisReport {
+  totalScenarios: number;
+  totalTrades: number;
+  overallWinRate: number;
+  totalNetProfit: number;
+  profitFactor: number;
+  averageWin: number;
+  averageLoss: number;
+  winRateByCondition: Record<MarketCondition, number>;
+  slTriggeredPercent: number;
+  tpTriggeredPercent: number;
+  recommendations: string[];
+  // Trade duration statistics
+  avgDurationMinutes: number;
+  minDurationMinutes: number;
+  maxDurationMinutes: number;
+}
