@@ -4,11 +4,11 @@
 
 ## Core Principles
 
-### [PRINCIPLE_1_NAME]
+### [Tecnologias]
 
-<!-- Example: I. Library-First -->
+Usar Node, typescript y axios para hacer requests.
 
-[PRINCIPLE_1_DESCRIPTION]
+API Rest de Binance: https://developers.binance.com/docs/derivatives/change-log
 
 <!-- Example: Every feature starts as a standalone library; Libraries must be self-contained, independently testable, documented; Clear purpose required - no organizational-only libraries -->
 

@@ -44,15 +44,17 @@ export function calculateStopLossTakeProfit(
   stopLossPercent: number,
   takeProfitPercent: number,
 ): { stopLoss: number; takeProfit: number } {
+  const precision = 2; // BTCUSDT uses 2 decimal places
+
   if (side === "BUY") {
     return {
-      stopLoss: entryPrice * (1 - stopLossPercent / 100),
-      takeProfit: entryPrice * (1 + takeProfitPercent / 100),
+      stopLoss: Number((entryPrice * (1 - stopLossPercent / 100)).toFixed(precision)),
+      takeProfit: Number((entryPrice * (1 + takeProfitPercent / 100)).toFixed(precision)),
     };
   } else {
     return {
-      stopLoss: entryPrice * (1 + stopLossPercent / 100),
-      takeProfit: entryPrice * (1 - takeProfitPercent / 100),
+      stopLoss: Number((entryPrice * (1 + stopLossPercent / 100)).toFixed(precision)),
+      takeProfit: Number((entryPrice * (1 - takeProfitPercent / 100)).toFixed(precision)),
     };
   }
 }

@@ -56,7 +56,7 @@ export interface OrderBook {
 // === Order Types ===
 
 export type OrderSide = 'BUY' | 'SELL';
-export type OrderType = 'LIMIT' | 'MARKET' | 'STOP' | 'STOP_MARKET' | 'TAKE_PROFIT' | 'TAKE_PROFIT_MARKET';
+export type OrderType = 'LIMIT' | 'MARKET' | 'STOP' | 'STOP_MARKET' | 'TAKE_PROFIT' | 'TAKE_PROFIT_MARKET' | 'TRAILING_STOP_MARKET';
 export type TimeInForce = 'GTC' | 'IOC' | 'FOK';
 export type MarginType = 'CROSSED' | 'ISOLATED';
 export type PositionSide = 'BOTH' | 'LONG' | 'SHORT';
